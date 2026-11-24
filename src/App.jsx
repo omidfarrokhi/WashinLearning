@@ -1,3 +1,6 @@
+import { useEffect, useState } from "react";
+import { connectMQTT } from "./mqtt";
+
 import {
   Activity,
   Cpu,
@@ -31,7 +34,7 @@ const currentData = [
   { time: "00:40", current: 2.2 },
 ];
 
-function Sidebar() {
+function Sidebar({ mqttStatus }) {
   return (
     <aside className="w-64 shrink-0 border-r border-slate-800 bg-[#0d1322] p-6">
       <div className="mb-12 flex items-center gap-3">
@@ -76,7 +79,20 @@ function Sidebar() {
           Device
         </div>
         <p className="text-xs text-slate-500">ESP32 connection</p>
-        <p className="mt-2 text-sm text-amber-400">Demo mode</p>
+        <p
+          className={`mt-2 text-sm ${
+            mqttStatus === "connected" ? "text-emerald-400" : "text-amber-400"
+          }`}>
+          {mqttStatus === "connected"
+            ? "MQTT Connected"
+            : mqttStatus === "connecting"
+              ? "Connecting..."
+              : mqttStatus === "reconnecting"
+                ? "Reconnecting..."
+                : mqttStatus === "error"
+                  ? "Connection error"
+                  : "Disconnected"}
+        </p>
       </div>
     </aside>
   );
@@ -95,7 +111,15 @@ function StatCard({ title, value, subtitle, icon: Icon }) {
   );
 }
 
-function Dashboard() {
+function Dashboard({
+  mqttStatus,
+  telemetry,
+  messageCount,
+  deviceOnline,
+  liveUptime,
+  lastCommunication,
+  messageHistory,
+}) {
   return (
     <main className="min-w-0 flex-1 p-5 md:p-8">
       <header className="mb-8 flex flex-wrap items-center justify-between gap-4">
@@ -107,35 +131,51 @@ function Dashboard() {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 rounded-full border border-amber-500/20 bg-amber-500/10 px-4 py-2 text-sm text-amber-400">
-          <span className="h-2 w-2 rounded-full bg-amber-400" />
-          Simulation active
+        <div
+          className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm ${
+            mqttStatus === "connected"
+              ? "border-emerald-500/20 bg-emerald-500/10 text-emerald-400"
+              : "border-amber-500/20 bg-amber-500/10 text-amber-400"
+          }`}>
+          <span
+            className={`h-2 w-2 rounded-full ${
+              mqttStatus === "connected" ? "bg-emerald-400" : "bg-amber-400"
+            }`}
+          />
+          {mqttStatus === "connected" ? "MQTT Connected" : "MQTT Disconnected"}
         </div>
       </header>
 
       <section className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           title="Current RMS"
-          value="2.14 A"
-          subtitle="Simulated measurement"
+          value="Not measured"
+          subtitle="Waiting for current sensor"
           icon={Activity}
         />
+
         <StatCard
           title="Operating mode"
-          value="Washing"
-          subtitle="Example classification"
+          value="Unknown"
+          subtitle="Detection not implemented"
           icon={Waves}
         />
+
         <StatCard
-          title="Confidence"
-          value="94.2%"
-          subtitle="Illustrative demo value"
+          title="MQTT messages"
+          value={messageCount}
+          subtitle="Messages received from ESP32"
           icon={Gauge}
         />
+
         <StatCard
           title="Device status"
-          value="Offline"
-          subtitle="ESP32 not connected"
+          value={deviceOnline ? "Online" : "Offline"}
+          subtitle={
+            deviceOnline
+              ? "Receiving ESP32 messages"
+              : "No recent ESP32 messages"
+          }
           icon={Wifi}
         />
       </section>
@@ -145,7 +185,7 @@ function Dashboard() {
           <div className="mb-6">
             <h3 className="font-semibold">Electrical current</h3>
             <p className="mt-1 text-sm text-slate-500">
-              Example current readings over time
+              Demo chart — current sensor not connected yet
             </p>
           </div>
 
@@ -210,30 +250,223 @@ function Dashboard() {
         </div>
       </section>
 
+      {/* DEVICE TELEMETRY SECTION */}
       <section className="mt-6 rounded-2xl border border-slate-800 bg-[#111a2b] p-5">
-        <h3 className="font-semibold">Recent activity</h3>
-        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-sm">
-          <div className="flex items-center gap-3">
-            <Droplets className="text-cyan-400" size={20} />
-            <div>
-              <p>Washing mode detected</p>
-              <p className="text-xs text-slate-500">
-                Example event · Demo data
-              </p>
-            </div>
+        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="font-semibold">Device telemetry</h3>
+            <p className="mt-1 text-sm text-slate-500">
+              Live ESP32 information
+            </p>
           </div>
-          <span className="text-xs text-slate-500">00:40</span>
+
+          <span
+            className={`rounded-full px-3 py-1 text-xs ${
+              deviceOnline
+                ? "bg-emerald-500/10 text-emerald-400"
+                : "bg-red-500/10 text-red-400"
+            }`}>
+            {deviceOnline ? "Device online" : "Device offline"}
+          </span>
+        </div>
+
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          <div>
+            <p className="text-xs text-slate-500">Device</p>
+            <p className="mt-1 font-medium">
+              {telemetry?.device || "Waiting..."}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs text-slate-500">Message count</p>
+            <p className="mt-1 font-medium">
+              {telemetry?.message_count ?? "--"}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs text-slate-500">Live uptime</p>
+            <p className="mt-1 font-medium">
+              {liveUptime !== null ? formatDuration(liveUptime) : "--"}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-xs text-slate-500">Last communication</p>
+            <p className="mt-1 font-medium">{lastCommunication}</p>
+          </div>
+        </div>
+
+        <div className="mt-6 border-t border-slate-800 pt-5">
+          <h4 className="mb-4 text-sm font-semibold">Recent MQTT messages</h4>
+
+          {messageHistory.length > 0 ? (
+            <div className="space-y-3">
+              {messageHistory.map((message, index) => (
+                <div
+                  key={`${message.receivedAt}-${index}`}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-slate-900/60 p-3">
+                  <div>
+                    <p className="text-sm text-slate-200">
+                      Message #{message.message_count}
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Mode: {message.mode}
+                    </p>
+                  </div>
+
+                  <span className="text-xs text-slate-500">
+                    {new Date(message.receivedAt).toLocaleTimeString()}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-slate-500">
+              Waiting for MQTT messages...
+            </p>
+          )}
         </div>
       </section>
     </main>
   );
 }
 
+function formatDuration(totalSeconds) {
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m ${seconds}s`;
+  }
+
+  if (minutes > 0) {
+    return `${minutes}m ${seconds}s`;
+  }
+
+  return `${seconds}s`;
+}
+
 function App() {
+  const [mqttStatus, setMqttStatus] = useState("connecting");
+  const [telemetry, setTelemetry] = useState(null);
+  const [messageCount, setMessageCount] = useState(0);
+
+  const [lastSeen, setLastSeen] = useState(null);
+  const [messageHistory, setMessageHistory] = useState([]);
+
+  const [now, setNow] = useState(Date.now());
+
+  // MQTT connection
+  useEffect(() => {
+    const disconnect = connectMQTT(
+      (data) => {
+        const receivedAt = Date.now();
+
+        setTelemetry(data.data);
+        setLastSeen(receivedAt);
+        setMessageCount((previous) => previous + 1);
+
+        setMessageHistory((previous) =>
+          [
+            {
+              ...data.data,
+              receivedAt,
+            },
+            ...previous,
+          ].slice(0, 10),
+        );
+      },
+      (status) => {
+        setMqttStatus(status);
+      },
+    );
+
+    const secondsSinceLastMessage = lastSeen
+      ? Math.floor((now - lastSeen) / 1000)
+      : null;
+
+    const deviceOnline =
+      secondsSinceLastMessage !== null && secondsSinceLastMessage <= 15;
+
+    const liveUptime = telemetry
+      ? telemetry.uptime_seconds + (deviceOnline ? secondsSinceLastMessage : 0)
+      : null;
+
+    const lastCommunication = lastSeen
+      ? secondsSinceLastMessage === 0
+        ? "Just now"
+        : `${secondsSinceLastMessage}s ago`
+      : "Never";
+
+    return () => {
+      disconnect();
+    };
+  }, []);
+
+  // Update the clock every second
+
+  useEffect(() => {
+    const disconnect = connectMQTT(
+      (data) => {
+        const receivedAt = Date.now();
+
+        setTelemetry(data.data);
+        setLastSeen(receivedAt);
+        setMessageCount((previous) => previous + 1);
+
+        setMessageHistory((previous) =>
+          [
+            {
+              ...data.data,
+              receivedAt,
+            },
+            ...previous,
+          ].slice(0, 10),
+        );
+      },
+      (status) => {
+        setMqttStatus(status);
+      },
+    );
+
+    return () => {
+      disconnect();
+    };
+  }, []);
+
+  const secondsSinceLastMessage = lastSeen
+    ? Math.floor((now - lastSeen) / 1000)
+    : null;
+
+  const deviceOnline =
+    secondsSinceLastMessage !== null && secondsSinceLastMessage <= 15;
+
+  const liveUptime = telemetry
+    ? telemetry.uptime_seconds + (deviceOnline ? secondsSinceLastMessage : 0)
+    : null;
+
+  const lastCommunication = lastSeen
+    ? secondsSinceLastMessage === 0
+      ? "Just now"
+      : `${secondsSinceLastMessage}s ago`
+    : "Never";
+
   return (
     <div className="flex min-h-screen bg-[#090d18] text-slate-100">
-      <Sidebar />
-      <Dashboard />
+      <Sidebar mqttStatus={mqttStatus} />
+
+      <Dashboard
+        mqttStatus={mqttStatus}
+        telemetry={telemetry}
+        messageCount={messageCount}
+        deviceOnline={deviceOnline}
+        liveUptime={liveUptime}
+        lastCommunication={lastCommunication}
+        messageHistory={messageHistory}
+      />
     </div>
   );
 }
